@@ -10,3 +10,23 @@ Livreur allows you to release your rust package as:
 - an npm package
 - a Homebrew tap
 - a Windows install
+
+## Validate configuration
+
+Livreur reads release policy from a versioned `livreur.toml`. Validate it together
+with the selected Cargo package before generating or running a release:
+
+```console
+livreur validate
+livreur validate --tag v1.2.3
+livreur validate --format json
+```
+
+Validation is local and side-effect-free. It resolves Cargo metadata, defaults,
+targets, and publication channels; it does not contact providers or change files.
+Use `--config` and `--manifest-path` when the files are not in the current
+directory.
+
+Unknown TOML fields and unsupported schema versions are rejected. The release
+version is parsed from the supplied tag and must match Cargo's package version.
+Prerelease and build metadata versions are not supported yet.
