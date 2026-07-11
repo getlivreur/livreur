@@ -74,7 +74,7 @@ struct RawConfig {
     build: RawBuild,
     #[serde(default)]
     installers: RawInstallers,
-    github: Option<RawGithub>,
+    forge: Option<RawForge>,
     #[serde(default)]
     npm: RawNpm,
     #[serde(default)]
@@ -150,6 +150,12 @@ struct RawGithub {
     protected_environment: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawForge {
+    github: Option<RawGithub>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawNpm {
@@ -198,6 +204,10 @@ pub struct ResolvedGithub {
     pub protected_environment: String,
 }
 #[derive(Debug, Clone, Serialize)]
+pub struct ResolvedForge {
+    pub github: ResolvedGithub,
+}
+#[derive(Debug, Clone, Serialize)]
 pub struct ResolvedNpm {
     pub enabled: bool,
     pub package: Option<String>,
@@ -220,7 +230,7 @@ pub struct ResolvedConfig {
     pub targets: Vec<String>,
     pub build: ResolvedBuild,
     pub installers: ResolvedInstallers,
-    pub github: ResolvedGithub,
+    pub forge: ResolvedForge,
     pub npm: ResolvedNpm,
     pub homebrew: ResolvedHomebrew,
     pub tool: Option<ResolvedTool>,
@@ -252,8 +262,7 @@ impl Config {
                 format!("cannot read {}: {e}", config_path.display()),
             )
         })?;
-        let raw: RawConfig =
-            toml::from_str(&text).map_err(|e| DiagnosticReport::one("config", e.to_string()))?;
+        let raw = parse(&text)?;
         let manifest_path = manifest_path.as_ref();
         let metadata = MetadataCommand::new()
             .manifest_path(manifest_path)
@@ -263,6 +272,17 @@ impl Config {
             .ok_or_else(|| DiagnosticReport::one("package", "could not select one Cargo package; point --manifest-path at the package manifest"))?;
         resolve(raw, package)
     }
+
+    pub(crate) fn resolve_text(
+        text: &str,
+        package: &Package,
+    ) -> Result<ResolvedConfig, DiagnosticReport> {
+        resolve(parse(text)?, package)
+    }
+}
+
+fn parse(text: &str) -> Result<RawConfig, DiagnosticReport> {
+    toml::from_str(text).map_err(|error| DiagnosticReport::one("config", error.to_string()))
 }
 
 impl ResolvedConfig {
@@ -317,16 +337,16 @@ fn resolve(raw: RawConfig, package: &Package) -> Result<ResolvedConfig, Diagnost
     let (resolved_package, name) = resolve_package(raw.package, package, &mut errors);
     validate_tag_template(&raw.release.tag, &mut errors);
     validate_targets(&raw.release.targets, &mut errors);
-    let github = if let Some(github) = raw.github {
-        validate_slug("github.repository", &github.repository, &mut errors);
+    let github = if let Some(github) = raw.forge.and_then(|forge| forge.github) {
+        validate_slug("forge.github.repository", &github.repository, &mut errors);
         nonempty(
-            "github.protected_environment",
+            "forge.github.protected_environment",
             &github.protected_environment,
             &mut errors,
         );
         github
     } else {
-        errors.push("github", "is required");
+        errors.push("forge.github", "is required");
         RawGithub {
             repository: String::new(),
             release_name: None,
@@ -374,12 +394,14 @@ fn resolve(raw: RawConfig, package: &Package) -> Result<ResolvedConfig, Diagnost
             unix: raw.installers.unix,
             powershell: raw.installers.powershell,
         },
-        github: ResolvedGithub {
-            repository: github.repository,
-            release_name: github
-                .release_name
-                .unwrap_or_else(|| format!("{name} {{version}}")),
-            protected_environment: github.protected_environment,
+        forge: ResolvedForge {
+            github: ResolvedGithub {
+                repository: github.repository,
+                release_name: github
+                    .release_name
+                    .unwrap_or_else(|| format!("{name} {{version}}")),
+                protected_environment: github.protected_environment,
+            },
         },
         npm: ResolvedNpm {
             enabled: raw.npm.enabled,
@@ -555,7 +577,7 @@ mod tests {
                 std::process::id()
             ));
             let github = if github {
-                r#"[github]
+                r#"[forge.github]
 repository = "example/livreur"
 protected_environment = "release"
 "#
@@ -629,6 +651,26 @@ authors = ["Example"]
     }
 
     #[test]
+    fn in_memory_resolution_matches_file_loading() {
+        let path = Fixture::new("");
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let metadata = MetadataCommand::new()
+            .manifest_path(&manifest)
+            .exec()
+            .expect("Cargo metadata");
+        let package = metadata.root_package().expect("root package");
+        let text = fs::read_to_string(path.as_ref()).expect("fixture config");
+
+        let from_file = Config::load(&path, &manifest).expect("file config");
+        let from_memory = Config::resolve_text(&text, package).expect("in-memory config");
+
+        assert_eq!(
+            serde_json::to_value(from_file).expect("serializable"),
+            serde_json::to_value(from_memory).expect("serializable")
+        );
+    }
+
+    #[test]
     fn tool_version_is_an_optional_pin() {
         let path = Fixture::new("[tool]\nversion = \"1.2.3\"");
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
@@ -669,7 +711,7 @@ authors = ["Example"]
         let error = Config::load(&path, manifest).expect_err("github must be required");
 
         assert_eq!(error.errors.len(), 1);
-        assert_eq!(error.errors[0].path, "github");
+        assert_eq!(error.errors[0].path, "forge.github");
         assert_eq!(error.errors[0].message, "is required");
     }
 

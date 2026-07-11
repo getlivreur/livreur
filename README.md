@@ -11,6 +11,17 @@ Livreur allows you to release your rust package as:
 - a Homebrew tap
 - a Windows install
 
+Initialize a Cargo package with an interactive GitHub release setup:
+
+```console
+livreur init
+livreur init --yes
+```
+
+This creates `livreur.toml` and a fully managed
+`.github/workflows/release.yml`. Existing files are never replaced without an
+interactive confirmation or `--force`.
+
 ## Validate configuration
 
 Livreur reads release policy from a versioned `livreur.toml`. Validate it together

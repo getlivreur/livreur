@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use livreur::{Config, DiagnosticReport};
+use livreur::{Config, DiagnosticReport, InitOptions};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -12,6 +12,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Create livreur.toml and a managed GitHub Actions release workflow.
+    Init {
+        #[arg(long, default_value = "Cargo.toml")]
+        manifest_path: PathBuf,
+        #[arg(long, default_value = "livreur.toml")]
+        config: PathBuf,
+        #[arg(long, default_value = ".github/workflows/release.yml")]
+        workflow: PathBuf,
+        /// Accept all detected and default values without prompting.
+        #[arg(long)]
+        yes: bool,
+        /// Replace all generated output files without prompting.
+        #[arg(long)]
+        force: bool,
+    },
     /// Validate livreur.toml and its Cargo package without side effects.
     Validate {
         #[arg(long, default_value = "livreur.toml")]
@@ -44,6 +59,33 @@ struct JsonOutput<'a, T: Serialize> {
 fn main() {
     let Cli { command } = Cli::parse();
     let code = match command {
+        Command::Init {
+            manifest_path,
+            config,
+            workflow,
+            yes,
+            force,
+        } => match livreur::initialize(&InitOptions {
+            manifest_path,
+            config_path: config,
+            workflow_path: workflow,
+            yes,
+            force,
+        }) {
+            Ok(result) => {
+                for path in result.written {
+                    println!("created {}", path.display());
+                }
+                for path in result.skipped {
+                    println!("skipped {}", path.display());
+                }
+                0
+            }
+            Err(error) => {
+                eprintln!("initialization failed: {error}");
+                2
+            }
+        },
         Command::Validate {
             config,
             manifest_path,

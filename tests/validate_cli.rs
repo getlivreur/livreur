@@ -25,7 +25,7 @@ license = "MIT"
 repository = "https://github.com/example/livreur"
 authors = ["Example"]
 
-[github]
+[forge.github]
 repository = "example/livreur"
 protected_environment = "release"
 
