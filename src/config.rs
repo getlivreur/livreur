@@ -14,6 +14,39 @@ const DEFAULT_TARGETS: [&str; 5] = [
     "x86_64-pc-windows-msvc",
 ];
 
+pub const DEFAULT_CONFIG_TEMPLATE: &str = r#"schema = 1
+
+# Optional overrides; resolved from Cargo.toml when omitted:
+# name, description, license, repository, authors, binary
+[package]
+
+[release]
+tag = "v{version}"
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+[build]
+features = []
+no_default_features = false
+locked = true
+cargo_args = []
+
+[installers]
+unix = true
+powershell = true
+
+[npm]
+enabled = false
+
+[homebrew]
+enabled = false
+"#;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Diagnostic {
     pub path: String,
@@ -74,7 +107,6 @@ struct RawConfig {
     build: RawBuild,
     #[serde(default)]
     installers: RawInstallers,
-    github: Option<RawGithub>,
     #[serde(default)]
     npm: RawNpm,
     #[serde(default)]
@@ -142,14 +174,6 @@ impl Default for RawInstallers {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawGithub {
-    repository: String,
-    release_name: Option<String>,
-    protected_environment: String,
-}
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawNpm {
@@ -192,12 +216,6 @@ pub struct ResolvedInstallers {
     pub powershell: bool,
 }
 #[derive(Debug, Clone, Serialize)]
-pub struct ResolvedGithub {
-    pub repository: String,
-    pub release_name: String,
-    pub protected_environment: String,
-}
-#[derive(Debug, Clone, Serialize)]
 pub struct ResolvedNpm {
     pub enabled: bool,
     pub package: Option<String>,
@@ -220,7 +238,6 @@ pub struct ResolvedConfig {
     pub targets: Vec<String>,
     pub build: ResolvedBuild,
     pub installers: ResolvedInstallers,
-    pub github: ResolvedGithub,
     pub npm: ResolvedNpm,
     pub homebrew: ResolvedHomebrew,
     pub tool: Option<ResolvedTool>,
@@ -317,22 +334,6 @@ fn resolve(raw: RawConfig, package: &Package) -> Result<ResolvedConfig, Diagnost
     let (resolved_package, name) = resolve_package(raw.package, package, &mut errors);
     validate_tag_template(&raw.release.tag, &mut errors);
     validate_targets(&raw.release.targets, &mut errors);
-    let github = if let Some(github) = raw.github {
-        validate_slug("github.repository", &github.repository, &mut errors);
-        nonempty(
-            "github.protected_environment",
-            &github.protected_environment,
-            &mut errors,
-        );
-        github
-    } else {
-        errors.push("github", "is required");
-        RawGithub {
-            repository: String::new(),
-            release_name: None,
-            protected_environment: String::new(),
-        }
-    };
     let npm_package = raw
         .npm
         .package
@@ -373,13 +374,6 @@ fn resolve(raw: RawConfig, package: &Package) -> Result<ResolvedConfig, Diagnost
         installers: ResolvedInstallers {
             unix: raw.installers.unix,
             powershell: raw.installers.powershell,
-        },
-        github: ResolvedGithub {
-            repository: github.repository,
-            release_name: github
-                .release_name
-                .unwrap_or_else(|| format!("{name} {{version}}")),
-            protected_environment: github.protected_environment,
         },
         npm: ResolvedNpm {
             enabled: raw.npm.enabled,
@@ -537,31 +531,19 @@ mod tests {
 
     impl Fixture {
         fn new(extra: &str) -> Self {
-            Self::with_sections(extra, "", true)
+            Self::with_sections(extra, "")
         }
 
         fn with_package_name(name: &str) -> Self {
-            Self::with_sections("", &format!("name = {name:?}"), true)
+            Self::with_sections("", &format!("name = {name:?}"))
         }
 
-        fn without_github() -> Self {
-            Self::with_sections("", "", false)
-        }
-
-        fn with_sections(extra: &str, package_extra: &str, github: bool) -> Self {
+        fn with_sections(extra: &str, package_extra: &str) -> Self {
             let nonce = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
                 "livreur-config-{}-{nonce}.toml",
                 std::process::id()
             ));
-            let github = if github {
-                r#"[github]
-repository = "example/livreur"
-protected_environment = "release"
-"#
-            } else {
-                ""
-            };
             let contents = format!(
                 r#"
 schema = 1
@@ -572,9 +554,6 @@ description = "test package"
 license = "MIT"
 repository = "https://github.com/example/livreur"
 authors = ["Example"]
-
-{github}
-
 "#
             );
             fs::write(&path, contents).expect("write fixture");
@@ -592,6 +571,39 @@ authors = ["Example"]
         fn drop(&mut self) {
             fs::remove_file(&self.0).ok();
         }
+    }
+
+    #[test]
+    fn default_template_matches_default_impls() {
+        let raw: RawConfig =
+            toml::from_str(DEFAULT_CONFIG_TEMPLATE).expect("default template parses");
+
+        assert_eq!(raw.schema, 1);
+        assert!(raw.package.name.is_none());
+        assert!(raw.package.description.is_none());
+        assert!(raw.package.license.is_none());
+        assert!(raw.package.repository.is_none());
+        assert!(raw.package.authors.is_none());
+        assert!(raw.package.binary.is_none());
+        let release = RawRelease::default();
+        assert_eq!(raw.release.tag, release.tag);
+        assert_eq!(raw.release.targets, release.targets);
+        let build = RawBuild::default();
+        assert_eq!(raw.build.features, build.features);
+        assert_eq!(raw.build.no_default_features, build.no_default_features);
+        assert_eq!(raw.build.locked, build.locked);
+        assert_eq!(raw.build.cargo_args, build.cargo_args);
+        let installers = RawInstallers::default();
+        assert_eq!(raw.installers.unix, installers.unix);
+        assert_eq!(raw.installers.powershell, installers.powershell);
+        let npm = RawNpm::default();
+        assert_eq!(raw.npm.enabled, npm.enabled);
+        assert_eq!(raw.npm.package, npm.package);
+        assert_eq!(raw.npm.platform_scope, npm.platform_scope);
+        let homebrew = RawHomebrew::default();
+        assert_eq!(raw.homebrew.enabled, homebrew.enabled);
+        assert_eq!(raw.homebrew.tap, homebrew.tap);
+        assert!(raw.tool.is_none());
     }
 
     #[test]
@@ -660,17 +672,6 @@ authors = ["Example"]
                 .to_string()
                 .contains("package.name: must not be empty")
         );
-    }
-
-    #[test]
-    fn public_load_reports_a_missing_github_section() {
-        let path = Fixture::without_github();
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-        let error = Config::load(&path, manifest).expect_err("github must be required");
-
-        assert_eq!(error.errors.len(), 1);
-        assert_eq!(error.errors[0].path, "github");
-        assert_eq!(error.errors[0].message, "is required");
     }
 
     #[test]

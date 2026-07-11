@@ -24,11 +24,6 @@ description = "test package"
 license = "MIT"
 repository = "https://github.com/example/livreur"
 authors = ["Example"]
-
-[github]
-repository = "example/livreur"
-protected_environment = "release"
-
 "#
         );
         fs::write(&path, contents).expect("write fixture");
