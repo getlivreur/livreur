@@ -1,4 +1,4 @@
-pre-push:
+pre-commit:
   jobs:
     - name: rust-fmt
       glob: "*.rs"
@@ -6,7 +6,7 @@ pre-push:
       stage_fixed: true
     - name: rust-clippy
       glob: "*.rs"
-      run: cargo clippy -D warnings -D clippy::pedantic -D clippy::perf -D clippy::suspicious
+      run: cargo clippy -- -D warnings -D clippy::pedantic -D clippy::perf -D clippy::suspicious
 # EXAMPLE USAGE:
 #
 #   Refer for explanation to following link:
