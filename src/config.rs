@@ -414,10 +414,10 @@ fn resolve_package(
                 "package.binary",
                 "must select a binary when Cargo exposes zero or multiple binaries",
             );
-            package.name.clone()
+            package.name.to_string()
         }
     };
-    let name = raw.name.unwrap_or_else(|| package.name.clone());
+    let name = raw.name.unwrap_or_else(|| package.name.to_string());
     nonempty("package.name", &name, errors);
     let description = required(
         "package.description",
@@ -627,12 +627,14 @@ authors = ["Example"]
         let path = Fixture::new("");
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         let resolved = Config::load(&path, manifest).expect("valid config");
+        let version = Version::parse(env!("CARGO_PKG_VERSION")).expect("package version is SemVer");
+        let tag = format!("v{version}");
 
         assert_eq!(resolved.package.name, "livreur");
-        assert_eq!(resolved.package.version, Version::new(0, 1, 0));
+        assert_eq!(resolved.package.version, version);
         assert_eq!(resolved.targets.len(), 5);
-        let release = resolved.for_tag("v0.1.0").expect("matching tag");
-        assert_eq!(release.version, Version::new(0, 1, 0));
+        let release = resolved.for_tag(&tag).expect("matching tag");
+        assert_eq!(release.version, version);
         assert!(resolved.installers.unix);
         assert!(resolved.installers.powershell);
         assert!(!resolved.npm.enabled);

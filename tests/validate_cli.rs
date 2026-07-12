@@ -72,12 +72,14 @@ fn valid_config_without_tag_has_no_release() {
 #[test]
 fn valid_tag_includes_tag_derived_release() {
     let fixture = Fixture::new("");
-    let output = validate(&fixture.0, Some("v0.1.0"));
+    let version = env!("CARGO_PKG_VERSION");
+    let tag = format!("v{version}");
+    let output = validate(&fixture.0, Some(&tag));
     let body = json(&output);
 
     assert!(output.status.success());
     assert_eq!(body["valid"], true);
-    assert_eq!(body["release"]["version"], "0.1.0");
+    assert_eq!(body["release"]["version"], version);
 }
 
 #[test]
