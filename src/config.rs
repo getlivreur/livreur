@@ -1,6 +1,6 @@
 use cargo_metadata::{MetadataCommand, Package, Target, TargetKind};
 use semver::Version;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
@@ -19,6 +19,11 @@ pub const DEFAULT_CONFIG_TEMPLATE: &str = r#"schema = 1
 # Optional overrides; resolved from Cargo.toml when omitted:
 # name, description, license, repository, authors, binary
 [package]
+
+# Optional Livreur version used by generated workflows. Accepts a stable SemVer
+# (with or without a leading `v`) or "source". Omit to install the latest release.
+# [tool]
+# version = "1.2.3"
 
 [release]
 tag = "v{version}"
@@ -190,7 +195,62 @@ struct RawHomebrew {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTool {
-    version: Version,
+    version: ToolVersion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolVersion {
+    Source,
+    Version(Version),
+}
+
+impl ToolVersion {
+    #[must_use]
+    pub const fn is_source(&self) -> bool {
+        matches!(self, Self::Source)
+    }
+}
+
+impl fmt::Display for ToolVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source => f.write_str("source"),
+            Self::Version(version) => version.fmt(f),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value == "source" {
+            return Ok(Self::Source);
+        }
+        let normalized = value.strip_prefix('v').unwrap_or(&value);
+        let version = Version::parse(normalized).map_err(|error| {
+            de::Error::custom(format!(
+                "expected a stable SemVer version (with or without `v`) or `source`: {error}"
+            ))
+        })?;
+        if !version.pre.is_empty() || !version.build.is_empty() {
+            return Err(de::Error::custom(
+                "prerelease and build metadata versions are not supported",
+            ));
+        }
+        Ok(Self::Version(version))
+    }
+}
+
+impl Serialize for ToolVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -228,7 +288,7 @@ pub struct ResolvedHomebrew {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedTool {
-    pub version: Version,
+    pub version: ToolVersion,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedConfig {
@@ -251,6 +311,35 @@ pub struct ReleaseConfig {
 pub struct Config;
 
 impl Config {
+    /// Loads the optional Livreur version used by generated workflows.
+    ///
+    /// This reads only the workflow-specific configuration and does not require
+    /// Cargo package metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics when the configuration cannot be read or parsed, or
+    /// when the configured tool version is invalid.
+    pub fn load_tool_version(
+        config_path: impl AsRef<Path>,
+    ) -> Result<Option<ToolVersion>, DiagnosticReport> {
+        #[derive(Deserialize)]
+        struct WorkflowConfig {
+            tool: Option<RawTool>,
+        }
+
+        let config_path = config_path.as_ref();
+        let text = fs::read_to_string(config_path).map_err(|e| {
+            DiagnosticReport::one(
+                "config",
+                format!("cannot read {}: {e}", config_path.display()),
+            )
+        })?;
+        let raw: WorkflowConfig =
+            toml::from_str(&text).map_err(|e| DiagnosticReport::one("config", e.to_string()))?;
+        Ok(raw.tool.map(|tool| tool.version))
+    }
+
     /// Loads a Livreur configuration and resolves it against Cargo package metadata.
     ///
     /// # Errors
@@ -650,8 +739,46 @@ authors = ["Example"]
 
         assert_eq!(
             resolved.tool.expect("configured tool").version,
-            Version::new(1, 2, 3)
+            ToolVersion::Version(Version::new(1, 2, 3))
         );
+    }
+
+    #[test]
+    fn tool_version_normalizes_a_leading_v() {
+        let path = Fixture::new("[tool]\nversion = \"v1.2.3\"");
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let resolved = Config::load(&path, manifest).expect("valid config");
+
+        assert_eq!(
+            resolved.tool.expect("configured tool").version,
+            ToolVersion::Version(Version::new(1, 2, 3))
+        );
+    }
+
+    #[test]
+    fn tool_version_accepts_source() {
+        let path = Fixture::new("[tool]\nversion = \"source\"");
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let resolved = Config::load(&path, manifest).expect("valid config");
+
+        assert_eq!(
+            resolved.tool.expect("configured tool").version,
+            ToolVersion::Source
+        );
+    }
+
+    #[test]
+    fn tool_version_rejects_unsupported_values() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        for value in ["latest", "1.2.3-rc.1", "1.2.3+build"] {
+            let path = Fixture::new(&format!("[tool]\nversion = {value:?}"));
+            let error = Config::load(&path, &manifest).expect_err("tool version must fail");
+
+            assert!(
+                error.to_string().contains("config:"),
+                "unexpected diagnostic for {value}: {error}"
+            );
+        }
     }
 
     #[test]

@@ -20,9 +20,15 @@ jobs:
       GH_TOKEN: {% raw %}${{ github.token }}{% endraw %}
     steps:
       - uses: actions/checkout@v6
+      {%- if tool_source %}
+      - uses: dtolnay/rust-toolchain@stable
+      {%- endif %}
+      - uses: getlivreur/setup-livreur@v1
+        {%- if tool_version %}
+        with:
+          version: "{{ tool_version }}"
+        {%- endif %}
       - run: rustup target add {% raw %}${{ matrix.target }}{% endraw %}
-      # Installs livreur from crates.io; use `cargo install --path .` to dogfood a checkout.
-      - run: cargo install livreur --locked
       - run: livreur build --target {% raw %}${{ matrix.target }}{% endraw %}
   publish:
     needs: build
@@ -31,5 +37,12 @@ jobs:
       GH_TOKEN: {% raw %}${{ github.token }}{% endraw %}
     steps:
       - uses: actions/checkout@v6
-      - run: cargo install livreur --locked
+      {%- if tool_source %}
+      - uses: dtolnay/rust-toolchain@stable
+      {%- endif %}
+      - uses: getlivreur/setup-livreur@v1
+        {%- if tool_version %}
+        with:
+          version: "{{ tool_version }}"
+        {%- endif %}
       - run: livreur publish
