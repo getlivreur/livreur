@@ -1,4 +1,6 @@
+pub mod build;
 pub mod init;
+pub mod publish;
 pub mod validate;
 
 use clap::ValueEnum;
@@ -37,4 +39,20 @@ pub fn print_json(value: &impl Serialize) {
         "{}",
         serde_json::to_string_pretty(value).expect("serializable output")
     );
+}
+
+pub fn resolve_tag(flag: Option<&str>) -> Result<String, DiagnosticReport> {
+    if let Some(tag) = flag.filter(|tag| !tag.is_empty()) {
+        return Ok(tag.to_owned());
+    }
+    if let Some(tag) = std::env::var("GITHUB_REF_NAME")
+        .ok()
+        .filter(|tag| !tag.is_empty())
+    {
+        return Ok(tag);
+    }
+    Err(DiagnosticReport::one(
+        "--tag",
+        "no tag given; pass --tag or set GITHUB_REF_NAME",
+    ))
 }
