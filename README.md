@@ -30,3 +30,54 @@ directory.
 Unknown TOML fields and unsupported schema versions are rejected. The release
 version is parsed from the supplied tag and must match Cargo's package version.
 Prerelease and build metadata versions are not supported yet.
+
+## Build
+
+Build and upload one native target from each GitHub Actions matrix job:
+
+```console
+livreur build --target x86_64-unknown-linux-gnu
+livreur build --target aarch64-apple-darwin --tag v1.2.3
+```
+
+The tag comes from `--tag` or `GITHUB_REF_NAME`. Livreur runs Cargo in release
+mode, creates a flat `.tar.gz` (or `.zip` on Windows) containing the binary and
+any `README*` and `LICENSE*` files, then uploads it with `--clobber`. The tag must
+already exist. The first build creates a draft GitHub release; later matrix jobs
+reuse it. Build refuses to replace assets after a release is published because
+doing so would make its `SHA256SUMS` stale. A narrow draft-creation race remains
+if multiple first-time matrix jobs reach GitHub simultaneously, so publishing
+always checks the complete asset set.
+
+Livreur owns Cargo's `--release`, `--target`, `--message-format`,
+`--manifest-path`, and `--bin` arguments. Do not repeat or override them in
+`build.cargo_args`.
+
+## Publish
+
+After every target build succeeds, verify the release and publish it:
+
+```console
+livreur publish
+livreur publish --tag v1.2.3 --format json
+```
+
+Publish refuses an incomplete asset set. It downloads the uploaded archives,
+computes one sorted, `sha256sum -c`-compatible `SHA256SUMS`, uploads it with
+`--clobber`, and removes draft status. Re-running against an already published
+release is a successful read-only no-op.
+
+Both commands shell out to the GitHub `gh` CLI in the current repository. Set
+`GH_TOKEN` for authentication; no owner/repository setting is required.
+
+## GitHub Actions
+
+`livreur init` creates both `livreur.toml` and
+`.github/workflows/release.yml`. Use `--no-workflow` to create only the config,
+or `--workflow <path>` to choose another workflow location. The generated
+workflow uses native Linux, macOS, and Windows matrix runners, followed by one
+publish job.
+
+The workflow needs `permissions: contents: write` and exposes
+`${{ github.token }}` as `GH_TOKEN`. Keep its matrix synchronized with
+`release.targets`, and adjust its tag glob if you change `release.tag`.

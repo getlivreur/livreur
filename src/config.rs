@@ -6,7 +6,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
-const DEFAULT_TARGETS: [&str; 5] = [
+pub const DEFAULT_TARGETS: [&str; 5] = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "x86_64-apple-darwin",
@@ -59,7 +59,7 @@ pub struct DiagnosticReport {
 }
 
 impl DiagnosticReport {
-    fn one(path: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn one(path: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             errors: vec![Diagnostic {
                 path: path.into(),
@@ -68,7 +68,7 @@ impl DiagnosticReport {
         }
     }
 
-    fn push(&mut self, path: impl Into<String>, message: impl Into<String>) {
+    pub fn push(&mut self, path: impl Into<String>, message: impl Into<String>) {
         self.errors.push(Diagnostic {
             path: path.into(),
             message: message.into(),
