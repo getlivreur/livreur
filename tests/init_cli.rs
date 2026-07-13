@@ -72,12 +72,16 @@ fn init_writes_the_default_config() {
     assert_eq!(parsed["installers"]["powershell"].as_bool(), Some(true));
     assert_eq!(parsed["npm"]["enabled"].as_bool(), Some(false));
     assert_eq!(parsed["homebrew"]["enabled"].as_bool(), Some(false));
+    assert_eq!(parsed["crates"]["enabled"].as_bool(), Some(false));
+    assert_eq!(parsed["crates"]["locked"].as_bool(), Some(true));
     let workflow = fs::read_to_string(workflow).expect("workflow written");
     assert!(workflow.contains("permissions:\n  contents: write"));
     assert!(workflow.contains("uses: getlivreur/setup-livreur@v1"));
     assert!(!workflow.contains("cargo install livreur"));
     assert!(!workflow.contains("with:\n          version:"));
     assert!(workflow.contains("livreur publish"));
+    assert!(!workflow.contains("cargo publish"));
+    assert!(!workflow.contains("id-token"));
 }
 
 #[test]
@@ -164,6 +168,46 @@ fn init_sets_up_rust_when_the_configured_tool_version_is_source() {
             .count(),
         2
     );
+}
+
+#[test]
+fn init_enables_crates_io_publishing_from_an_existing_config() {
+    let fixture = Fixture::new();
+    let config = fixture.config();
+    let workflow = fixture.workflow();
+    fs::create_dir_all(config.parent().expect("config parent")).expect("create config parent");
+    fs::write(&config, "schema = 1\n\n[crates]\nenabled = true\n").expect("write existing config");
+
+    let output = init(&config, &workflow, false);
+
+    assert!(output.status.success());
+    let workflow = fs::read_to_string(workflow).expect("workflow written");
+    assert!(workflow.contains("id-token: write"));
+    assert!(workflow.contains(
+        "uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5"
+    ));
+    assert!(workflow.contains("run: cargo publish --locked"));
+    assert!(workflow.find("livreur publish").unwrap() < workflow.find("cargo publish").unwrap());
+}
+
+#[test]
+fn init_can_publish_a_crate_without_a_committed_lockfile() {
+    let fixture = Fixture::new();
+    let config = fixture.config();
+    let workflow = fixture.workflow();
+    fs::create_dir_all(config.parent().expect("config parent")).expect("create config parent");
+    fs::write(
+        &config,
+        "schema = 1\n\n[crates]\nenabled = true\nlocked = false\n",
+    )
+    .expect("write existing config");
+
+    let output = init(&config, &workflow, false);
+
+    assert!(output.status.success());
+    let workflow = fs::read_to_string(workflow).expect("workflow written");
+    assert!(workflow.contains("run: cargo publish\n"));
+    assert!(!workflow.contains("cargo publish --locked"));
 }
 
 #[test]

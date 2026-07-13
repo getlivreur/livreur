@@ -32,6 +32,11 @@ jobs:
       - run: livreur build --target {% raw %}${{ matrix.target }}{% endraw %}
   publish:
     needs: build
+    {%- if crates_enabled %}
+    permissions:
+      contents: write
+      id-token: write
+    {%- endif %}
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: {% raw %}${{ github.token }}{% endraw %}
@@ -46,3 +51,6 @@ jobs:
           version: "{{ tool_version }}"
         {%- endif %}
       - run: livreur publish
+      {%- if crates_enabled %}
+{% include "cargo-publish.yml.tera" %}
+      {%- endif %}

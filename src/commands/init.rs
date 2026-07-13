@@ -15,23 +15,33 @@ pub fn init(config: &Path, workflow: &Path, no_workflow: bool) -> i32 {
     let workflow_status = if no_workflow {
         None
     } else {
-        let tool_version = match config_status {
+        let workflow_config = match config_status {
             WriteStatus::Created | WriteStatus::Existing => {
-                match Config::load_tool_version(config) {
-                    Ok(tool_version) => tool_version,
+                match Config::load_workflow_config(config) {
+                    Ok(workflow_config) => workflow_config,
                     Err(report) => {
                         eprintln!("cannot load workflow configuration: {report}");
                         return 2;
                     }
                 }
             }
-            WriteStatus::Failed => None,
+            WriteStatus::Failed => livreur::WorkflowConfig {
+                tool_version: None,
+                crates_enabled: false,
+                crates_locked: true,
+            },
         };
         let targets = DEFAULT_TARGETS
             .iter()
             .map(|target| (*target).to_owned())
             .collect::<Vec<_>>();
-        match render_workflow(&targets, "v*", tool_version.as_ref()) {
+        match render_workflow(
+            &targets,
+            "v*",
+            workflow_config.tool_version.as_ref(),
+            workflow_config.crates_enabled,
+            workflow_config.crates_locked,
+        ) {
             Ok(contents) => {
                 let status = write_new(workflow, &contents);
                 if status == WriteStatus::Existing {

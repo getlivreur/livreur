@@ -50,6 +50,13 @@ enabled = false
 
 [homebrew]
 enabled = false
+
+# Publish the crate to crates.io from the release workflow using
+# crates.io Trusted Publishing (configure the repository on crates.io first).
+[crates]
+enabled = false
+# Pass --locked to cargo publish. Disable for crates that do not commit Cargo.lock.
+locked = true
 "#;
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,6 +123,8 @@ struct RawConfig {
     npm: RawNpm,
     #[serde(default)]
     homebrew: RawHomebrew,
+    #[serde(default)]
+    crates: RawCrates,
     tool: Option<RawTool>,
 }
 
@@ -191,6 +200,20 @@ struct RawNpm {
 struct RawHomebrew {
     enabled: bool,
     tap: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawCrates {
+    enabled: bool,
+    locked: bool,
+}
+impl Default for RawCrates {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            locked: true,
+        }
+    }
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -287,6 +310,11 @@ pub struct ResolvedHomebrew {
     pub tap: Option<String>,
 }
 #[derive(Debug, Clone, Serialize)]
+pub struct ResolvedCrates {
+    pub enabled: bool,
+    pub locked: bool,
+}
+#[derive(Debug, Clone, Serialize)]
 pub struct ResolvedTool {
     pub version: ToolVersion,
 }
@@ -300,6 +328,7 @@ pub struct ResolvedConfig {
     pub installers: ResolvedInstallers,
     pub npm: ResolvedNpm,
     pub homebrew: ResolvedHomebrew,
+    pub crates: ResolvedCrates,
     pub tool: Option<ResolvedTool>,
 }
 
@@ -308,10 +337,17 @@ pub struct ReleaseConfig {
     pub version: Version,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowConfig {
+    pub tool_version: Option<ToolVersion>,
+    pub crates_enabled: bool,
+    pub crates_locked: bool,
+}
+
 pub struct Config;
 
 impl Config {
-    /// Loads the optional Livreur version used by generated workflows.
+    /// Loads the configuration used to generate release workflows.
     ///
     /// This reads only the workflow-specific configuration and does not require
     /// Cargo package metadata.
@@ -320,12 +356,14 @@ impl Config {
     ///
     /// Returns diagnostics when the configuration cannot be read or parsed, or
     /// when the configured tool version is invalid.
-    pub fn load_tool_version(
+    pub fn load_workflow_config(
         config_path: impl AsRef<Path>,
-    ) -> Result<Option<ToolVersion>, DiagnosticReport> {
+    ) -> Result<WorkflowConfig, DiagnosticReport> {
         #[derive(Deserialize)]
-        struct WorkflowConfig {
+        struct RawWorkflowConfig {
             tool: Option<RawTool>,
+            #[serde(default)]
+            crates: RawCrates,
         }
 
         let config_path = config_path.as_ref();
@@ -335,9 +373,13 @@ impl Config {
                 format!("cannot read {}: {e}", config_path.display()),
             )
         })?;
-        let raw: WorkflowConfig =
+        let raw: RawWorkflowConfig =
             toml::from_str(&text).map_err(|e| DiagnosticReport::one("config", e.to_string()))?;
-        Ok(raw.tool.map(|tool| tool.version))
+        Ok(WorkflowConfig {
+            tool_version: raw.tool.map(|tool| tool.version),
+            crates_enabled: raw.crates.enabled,
+            crates_locked: raw.crates.locked,
+        })
     }
 
     /// Loads a Livreur configuration and resolves it against Cargo package metadata.
@@ -472,6 +514,10 @@ fn resolve(raw: RawConfig, package: &Package) -> Result<ResolvedConfig, Diagnost
         homebrew: ResolvedHomebrew {
             enabled: raw.homebrew.enabled,
             tap: raw.homebrew.tap,
+        },
+        crates: ResolvedCrates {
+            enabled: raw.crates.enabled,
+            locked: raw.crates.locked,
         },
         tool,
     };
@@ -692,6 +738,9 @@ authors = ["Example"]
         let homebrew = RawHomebrew::default();
         assert_eq!(raw.homebrew.enabled, homebrew.enabled);
         assert_eq!(raw.homebrew.tap, homebrew.tap);
+        let crates = RawCrates::default();
+        assert_eq!(raw.crates.enabled, crates.enabled);
+        assert_eq!(raw.crates.locked, crates.locked);
         assert!(raw.tool.is_none());
     }
 
@@ -728,7 +777,34 @@ authors = ["Example"]
         assert!(resolved.installers.powershell);
         assert!(!resolved.npm.enabled);
         assert!(!resolved.homebrew.enabled);
+        assert!(!resolved.crates.enabled);
+        assert!(resolved.crates.locked);
         assert!(resolved.tool.is_none());
+    }
+
+    #[test]
+    fn crates_publish_can_be_enabled_without_a_lockfile() {
+        let path = Fixture::new("[crates]\nenabled = true\nlocked = false");
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        let resolved = Config::load(&path, manifest).expect("valid config");
+
+        assert!(resolved.crates.enabled);
+        assert!(!resolved.crates.locked);
+    }
+
+    #[test]
+    fn workflow_config_loads_tool_version_and_crates_flag() {
+        let path = Fixture::new("[tool]\nversion = \"v1.2.3\"\n[crates]\nenabled = true");
+
+        let workflow = Config::load_workflow_config(&path).expect("valid workflow config");
+
+        assert_eq!(
+            workflow.tool_version,
+            Some(ToolVersion::Version(Version::new(1, 2, 3)))
+        );
+        assert!(workflow.crates_enabled);
+        assert!(workflow.crates_locked);
     }
 
     #[test]

@@ -2,7 +2,8 @@ use crate::{DiagnosticReport, ToolVersion};
 use serde::Serialize;
 use tera::{Context, Tera};
 
-const TEMPLATE: &str = include_str!("../templates/release.yml.tera");
+const RELEASE_TEMPLATE: &str = include_str!("../templates/release.yml.tera");
+const CARGO_PUBLISH_TEMPLATE: &str = include_str!("../templates/cargo-publish.yml.tera");
 
 #[must_use]
 pub fn runner_for(target: &str) -> &'static str {
@@ -31,6 +32,8 @@ pub fn render_workflow(
     targets: &[String],
     tag_glob: &str,
     tool_version: Option<&ToolVersion>,
+    crates_enabled: bool,
+    crates_locked: bool,
 ) -> Result<String, DiagnosticReport> {
     let targets: Vec<_> = targets
         .iter()
@@ -47,7 +50,15 @@ pub fn render_workflow(
         "tool_source",
         &tool_version.is_some_and(ToolVersion::is_source),
     );
-    Tera::one_off(TEMPLATE, &context, false)
+    context.insert("crates_enabled", &crates_enabled);
+    context.insert("crates_locked", &crates_locked);
+    let mut tera = Tera::default();
+    tera.add_raw_templates([
+        ("release.yml.tera", RELEASE_TEMPLATE),
+        ("cargo-publish.yml.tera", CARGO_PUBLISH_TEMPLATE),
+    ])
+    .map_err(|error| DiagnosticReport::one("workflow", error.to_string()))?;
+    tera.render("release.yml.tera", &context)
         .map_err(|error| DiagnosticReport::one("workflow", error.to_string()))
 }
 
@@ -62,7 +73,7 @@ mod tests {
             .iter()
             .map(|target| (*target).to_owned())
             .collect::<Vec<_>>();
-        let rendered = render_workflow(&targets, "v*", None).expect("render workflow");
+        let rendered = render_workflow(&targets, "v*", None, false, true).expect("render workflow");
         assert!(rendered.contains("permissions:\n  contents: write"));
         assert!(rendered.contains("tags: [\"v*\"]"));
         assert!(rendered.contains("aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm"));
@@ -72,6 +83,9 @@ mod tests {
         assert!(!rendered.contains("cargo install livreur"));
         assert!(!rendered.contains("with:\n          version:"));
         assert!(rendered.contains("publish:"));
+        assert!(!rendered.contains("crates-io-auth"));
+        assert!(!rendered.contains("cargo publish"));
+        assert!(!rendered.contains("id-token"));
     }
 
     #[test]
@@ -80,7 +94,8 @@ mod tests {
             "x86_64-unknown-linux-gnu".into(),
             "aarch64-apple-darwin".into(),
         ];
-        let rendered = render_workflow(&targets, "release-*", None).expect("render workflow");
+        let rendered =
+            render_workflow(&targets, "release-*", None, false, true).expect("render workflow");
         assert!(rendered.contains("x86_64-unknown-linux-gnu"));
         assert!(rendered.contains("aarch64-apple-darwin"));
         assert!(!rendered.contains("windows-msvc"));
@@ -91,7 +106,8 @@ mod tests {
         let targets = vec!["x86_64-unknown-linux-gnu".into()];
         let version = ToolVersion::Version(semver::Version::new(1, 2, 3));
 
-        let rendered = render_workflow(&targets, "v*", Some(&version)).expect("render workflow");
+        let rendered =
+            render_workflow(&targets, "v*", Some(&version), false, true).expect("render workflow");
 
         assert_eq!(rendered.matches("version: \"1.2.3\"").count(), 2);
         assert!(!rendered.contains("dtolnay/rust-toolchain"));
@@ -101,8 +117,8 @@ mod tests {
     fn source_tool_version_sets_up_rust_first() {
         let targets = vec!["x86_64-unknown-linux-gnu".into()];
 
-        let rendered =
-            render_workflow(&targets, "v*", Some(&ToolVersion::Source)).expect("render workflow");
+        let rendered = render_workflow(&targets, "v*", Some(&ToolVersion::Source), false, true)
+            .expect("render workflow");
 
         assert_eq!(
             rendered
@@ -124,5 +140,43 @@ mod tests {
         assert_eq!(setup.len(), 2);
         assert!(rust.iter().zip(&setup).all(|(rust, setup)| rust < setup));
         assert!(setup[0] < target);
+    }
+
+    #[test]
+    fn crates_publish_is_opt_in_and_runs_after_the_github_release() {
+        let targets = vec!["x86_64-unknown-linux-gnu".into()];
+
+        let rendered = render_workflow(&targets, "v*", None, true, true).expect("render workflow");
+
+        assert!(rendered.contains(
+            "  publish:\n    needs: build\n    permissions:\n      contents: write\n      id-token: write"
+        ));
+        assert!(rendered.contains(
+            "      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5"
+        ));
+        assert!(!rendered.contains("rust-lang/crates-io-auth-action@v1"));
+        assert!(rendered.contains("        id: crates-io-auth"));
+        assert!(rendered.contains("      - run: cargo publish --locked"));
+        assert!(rendered.contains(
+            "        env:\n          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}"
+        ));
+        let release = rendered.find("- run: livreur publish").unwrap();
+        let auth = rendered
+            .find("rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18")
+            .unwrap();
+        let publish = rendered.find("- run: cargo publish --locked").unwrap();
+        assert!(release < auth);
+        assert!(auth < publish);
+    }
+
+    #[test]
+    fn crates_publish_can_run_without_a_lockfile() {
+        let targets = vec!["x86_64-unknown-linux-gnu".into()];
+
+        let rendered = render_workflow(&targets, "v*", None, true, false)
+            .expect("render workflow without lockfile");
+
+        assert!(rendered.contains("      - run: cargo publish\n"));
+        assert!(!rendered.contains("cargo publish --locked"));
     }
 }
