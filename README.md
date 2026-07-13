@@ -81,3 +81,18 @@ publish job.
 The workflow needs `permissions: contents: write` and exposes
 `${{ github.token }}` as `GH_TOKEN`. Keep its matrix synchronized with
 `release.targets`, and adjust its tag glob if you change `release.tag`.
+
+Generated workflows install Livreur with `getlivreur/setup-livreur@v1`. By
+default the action selects the latest stable release. Pin a stable version in
+`livreur.toml` when rendering the workflow (a leading `v` is accepted and
+normalized away):
+
+```toml
+[tool]
+version = "1.2.3"
+```
+
+Use `version = "source"` to build Livreur's latest `main` commit instead. The
+generated workflow then installs the stable Rust toolchain before running the
+setup action. Tool selection is embedded when the workflow is generated, so
+regenerate the workflow after changing this setting.

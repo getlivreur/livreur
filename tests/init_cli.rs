@@ -1,3 +1,4 @@
+use livreur::DEFAULT_CONFIG_TEMPLATE;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -73,11 +74,14 @@ fn init_writes_the_default_config() {
     assert_eq!(parsed["homebrew"]["enabled"].as_bool(), Some(false));
     let workflow = fs::read_to_string(workflow).expect("workflow written");
     assert!(workflow.contains("permissions:\n  contents: write"));
+    assert!(workflow.contains("uses: getlivreur/setup-livreur@v1"));
+    assert!(!workflow.contains("cargo install livreur"));
+    assert!(!workflow.contains("with:\n          version:"));
     assert!(workflow.contains("livreur publish"));
 }
 
 #[test]
-fn init_refuses_to_overwrite_an_existing_file() {
+fn init_reuses_an_existing_config_when_creating_a_workflow() {
     let fixture = Fixture::new();
     let config = fixture.config();
     let workflow = fixture.workflow();
@@ -86,12 +90,79 @@ fn init_refuses_to_overwrite_an_existing_file() {
 
     let output = init(&config, &workflow, false);
 
-    assert_eq!(output.status.code(), Some(2));
+    assert!(output.status.success());
     let contents = fs::read_to_string(&config).expect("config still present");
     assert_eq!(contents, "custom = true");
     assert!(
         workflow.is_file(),
         "missing workflow should still be created"
+    );
+}
+
+#[test]
+fn init_does_not_load_the_config_after_a_write_error() {
+    let fixture = Fixture::new();
+    let config_parent = fixture.0.join("config-parent");
+    fs::write(&config_parent, "not a directory").expect("write config parent blocker");
+    let config = config_parent.join("livreur.toml");
+    let workflow = fixture.workflow();
+
+    let output = init(&config, &workflow, false);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
+    assert!(stderr.contains("cannot create"));
+    assert!(!stderr.contains("cannot load workflow configuration"));
+    assert!(
+        workflow.is_file(),
+        "default workflow should still be created"
+    );
+}
+
+#[test]
+fn init_uses_the_configured_tool_version_when_creating_a_workflow() {
+    let fixture = Fixture::new();
+    let config = fixture.config();
+    let workflow = fixture.workflow();
+    fs::create_dir_all(config.parent().expect("config parent")).expect("create config parent");
+    fs::write(
+        &config,
+        format!("{DEFAULT_CONFIG_TEMPLATE}\n[tool]\nversion = \"v1.2.3\"\n"),
+    )
+    .expect("write existing config");
+
+    let output = init(&config, &workflow, false);
+
+    assert!(output.status.success());
+    assert!(workflow.is_file(), "configured workflow should be created");
+    let workflow = fs::read_to_string(workflow).expect("workflow written");
+    assert_eq!(workflow.matches("version: \"1.2.3\"").count(), 2);
+    assert!(!workflow.contains("uses: dtolnay/rust-toolchain@stable"));
+}
+
+#[test]
+fn init_sets_up_rust_when_the_configured_tool_version_is_source() {
+    let fixture = Fixture::new();
+    let config = fixture.config();
+    let workflow = fixture.workflow();
+    fs::create_dir_all(config.parent().expect("config parent")).expect("create config parent");
+    fs::write(
+        &config,
+        format!("{DEFAULT_CONFIG_TEMPLATE}\n[tool]\nversion = \"source\"\n"),
+    )
+    .expect("write existing config");
+
+    let output = init(&config, &workflow, false);
+
+    assert!(output.status.success());
+    assert!(workflow.is_file(), "source workflow should be created");
+    let workflow = fs::read_to_string(workflow).expect("workflow written");
+    assert_eq!(workflow.matches("version: \"source\"").count(), 2);
+    assert_eq!(
+        workflow
+            .matches("uses: dtolnay/rust-toolchain@stable")
+            .count(),
+        2
     );
 }
 
