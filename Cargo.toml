@@ -2,6 +2,11 @@
 name = "livreur"
 version = "0.0.0"
 edition = "2024"
+description = "package and ship your rust binaries to brew,npm and more"
+license = "MIT"
+repository = "https://github.com/getlivreur/livreur"
+readme = "README.md"
+
 
 [dependencies]
 cargo_metadata = "0.23"
