@@ -1,0 +1,5 @@
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: crates-io-auth
+      - run: cargo publish{% if crates_locked %} --locked{% endif %}
+        env:
+          CARGO_REGISTRY_TOKEN: {% raw %}${{ steps.crates-io-auth.outputs.token }}{% endraw %}
