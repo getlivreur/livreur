@@ -1,5 +1,5 @@
 use super::{JsonOutput, OutputFormat, eprint_report, print_json};
-use livreur::Config;
+use livreur::{Config, validate_release_template};
 use std::path::PathBuf;
 
 pub fn validate(
@@ -25,6 +25,21 @@ pub fn validate(
             return 2;
         }
     };
+
+    if let Err(report) = validate_release_template(&resolved) {
+        match format {
+            OutputFormat::Human => eprint_report(&report),
+            OutputFormat::Json => print_json(&JsonOutput {
+                valid: false,
+                schema: Some(resolved.schema),
+                resolved: Some(&resolved),
+                release: None,
+                warnings: vec![],
+                errors: report.errors,
+            }),
+        }
+        return 2;
+    }
 
     let release = match tag.map(|tag| resolved.for_tag(tag)).transpose() {
         Ok(release) => release,

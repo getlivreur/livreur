@@ -67,6 +67,41 @@ computes one sorted, `sha256sum -c`-compatible `SHA256SUMS`, uploads it with
 `--clobber`, and removes draft status. Re-running against an already published
 release is a successful read-only no-op.
 
+### Release description templates
+
+Livreur fills the GitHub release description from an embedded Markdown
+[Tera](https://keats.github.io/tera/docs/) template when publishing. Extract a
+copy and add it to `livreur.toml` with:
+
+```console
+livreur template release
+```
+
+This creates `.github/release.md.tera` and configures it as
+`release.template`. Existing files or configuration are preserved unless
+`--force` is passed. Use `--output` and `--config` to choose other paths;
+relative output paths are resolved from the configuration file's directory.
+
+Templates receive the following stable values:
+
+- `package`: `name`, `version`, `description`, `license`, `repository`,
+  `authors`, and `binary`.
+- `release`: `tag`, `version`, `url`, and `checksums.name`/`checksums.url`.
+- `platforms`: an ordered list with `target`, `architecture`, `os`, and
+  `asset.name`/`asset.url`/`asset.sha256` for each configured target.
+- `channels`: `installers`, `npm`, `homebrew`, and `crates` configuration.
+
+For example:
+
+```tera
+{% for platform in platforms %}
+- [{{ platform.target }}]({{ platform.asset.url }}) (`{{ platform.asset.sha256 }}`)
+{% endfor %}
+```
+
+`livreur validate` reads and renders configured templates with representative
+release data, so invalid syntax and unknown variables fail before publishing.
+
 Both commands shell out to the GitHub `gh` CLI in the current repository. Set
 `GH_TOKEN` for authentication; no owner/repository setting is required.
 

@@ -21,6 +21,7 @@ struct Fixture {
     gh: PathBuf,
     gh_log: PathBuf,
     checksums: PathBuf,
+    notes: PathBuf,
 }
 
 impl Fixture {
@@ -57,7 +58,11 @@ case "$1 $2" in
       printf '%s\n' 'release not found' >&2
       exit 1
     fi
-    printf '%s\n' "$GH_VIEW_JSON"
+    if [ -e "$CHECKSUM_COPY" ]; then
+      printf '%s\n' "$GH_REFRESH_JSON"
+    else
+      printf '%s\n' "$GH_VIEW_JSON"
+    fi
     ;;
   "release download")
     shift 2
@@ -82,6 +87,15 @@ case "$1 $2" in
       cp "$last" "$CHECKSUM_COPY"
     fi
     ;;
+  "release edit")
+    if [ "$4" = "--notes-file" ]; then
+      if [ "$GH_MODE" = "notes-error" ]; then
+        printf '%s\n' 'could not update release notes' >&2
+        exit 1
+      fi
+      cp "$5" "$NOTES_COPY"
+    fi
+    ;;
 esac
 exit 0
 "#,
@@ -89,6 +103,7 @@ exit 0
         Self {
             gh_log: root.join("gh.log"),
             checksums: root.join("captured-SHA256SUMS"),
+            notes: root.join("captured-release-notes.md"),
             root,
             gh,
         }
@@ -116,9 +131,18 @@ exit 0
         if include_sums {
             assets.push("SHA256SUMS".into());
         }
+        let assets = assets
+            .into_iter()
+            .map(|name| {
+                let url =
+                    format!("https://github.com/example/fixture/releases/download/v0.1.0/{name}");
+                json!({ "name": name, "url": url })
+            })
+            .collect::<Vec<_>>();
         json!({
             "isDraft": draft,
-            "assets": assets.into_iter().map(|name| json!({ "name": name })).collect::<Vec<_>>()
+            "url": "https://github.com/example/fixture/releases/tag/v0.1.0",
+            "assets": assets
         })
         .to_string()
     }
@@ -138,8 +162,10 @@ exit 0
             .env("GH_LOG", &self.gh_log)
             .env("GH_MODE", mode)
             .env("GH_VIEW_JSON", view_json)
+            .env("GH_REFRESH_JSON", self.view_json(true, true, false))
             .env("GH_SKIP", skip.unwrap_or(""))
             .env("CHECKSUM_COPY", &self.checksums)
+            .env("NOTES_COPY", &self.notes)
             .output()
             .expect("run livreur")
     }
@@ -179,7 +205,22 @@ fn downloads_all_assets_uploads_checksums_and_publishes() {
     let log = fs::read_to_string(&fixture.gh_log).unwrap();
     assert_eq!(log.matches("--pattern").count(), 5);
     assert!(log.contains("release upload v0.1.0 --clobber"));
+    assert!(log.contains("release edit v0.1.0 --notes-file"));
     assert!(log.contains("release edit v0.1.0 --draft=false"));
+    let lines = log.lines().collect::<Vec<_>>();
+    let upload = lines
+        .iter()
+        .position(|line| line.contains("release upload"))
+        .unwrap();
+    let notes = lines
+        .iter()
+        .position(|line| line.contains("--notes-file"))
+        .unwrap();
+    let publish = lines
+        .iter()
+        .position(|line| line.contains("--draft=false"))
+        .unwrap();
+    assert!(upload < notes && notes < publish);
     let sums = fs::read_to_string(&fixture.checksums).expect("captured checksums");
     assert_eq!(sums.lines().count(), 5);
     assert!(
@@ -190,6 +231,11 @@ fn downloads_all_assets_uploads_checksums_and_publishes() {
     let mut sorted = names.clone();
     sorted.sort_unstable();
     assert_eq!(names, sorted);
+    let notes = fs::read_to_string(&fixture.notes).expect("captured release notes");
+    assert!(notes.contains("fixture"));
+    assert!(notes.contains(TARGETS[0]));
+    assert!(notes.contains("releases/download/v0.1.0"));
+    assert!(notes.contains("SHA256SUMS"));
 }
 
 #[test]
@@ -227,6 +273,23 @@ fn reports_a_download_that_does_not_land_an_asset() {
             .unwrap()
             .contains(&skipped)
     );
+}
+
+#[test]
+fn a_notes_update_failure_leaves_the_release_as_a_draft() {
+    let fixture = Fixture::new();
+    let output = fixture.run(&fixture.view_json(true, false, false), "notes-error", None);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        json_output(&output)["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("could not update release notes")
+    );
+    let log = fs::read_to_string(&fixture.gh_log).unwrap();
+    assert!(log.contains("--notes-file"));
+    assert!(!log.contains("--draft=false"));
 }
 
 #[test]
@@ -270,4 +333,23 @@ fn reports_a_missing_release() {
             .unwrap()
             .contains("run `livreur build` first")
     );
+}
+
+#[test]
+fn publish_validates_the_release_template_before_contacting_github() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("livreur.toml"),
+        "schema = 1\n[release]\ntemplate = \"missing-release-template.tera\"\n",
+    )
+    .unwrap();
+
+    let output = fixture.run(&fixture.view_json(true, false, false), "draft", None);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        json_output(&output)["errors"][0]["path"],
+        "release.template"
+    );
+    assert!(!fixture.gh_log.exists());
 }

@@ -60,6 +60,7 @@ fn init_writes_the_default_config() {
 
     assert_eq!(parsed["schema"].as_integer(), Some(1));
     assert_eq!(parsed["release"]["tag"].as_str(), Some("v{version}"));
+    assert!(parsed["release"].get("template").is_none());
     assert_eq!(
         parsed["release"]["targets"]
             .as_array()

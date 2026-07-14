@@ -1,0 +1,9 @@
+{{ package.description }}
+
+## Downloads
+
+| Platform | Download | SHA-256 |
+| --- | --- | --- |
+{% for platform in platforms %}| `{{ platform.target }}` | [{{ platform.asset.name }}]({{ platform.asset.url }}) | `{{ platform.asset.sha256 }}` |
+{% endfor %}
+Checksums for every download are also available in [{{ release.checksums.name }}]({{ release.checksums.url }}).

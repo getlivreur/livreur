@@ -1,6 +1,7 @@
 pub mod build;
 pub mod init;
 pub mod publish;
+pub mod template;
 pub mod validate;
 
 use clap::ValueEnum;

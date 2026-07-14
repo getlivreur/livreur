@@ -57,6 +57,24 @@ enum Command {
         #[arg(long)]
         no_workflow: bool,
     },
+    /// Extract customizable templates.
+    Template {
+        #[command(subcommand)]
+        command: TemplateCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum TemplateCommand {
+    /// Extract and configure the GitHub release description template.
+    Release {
+        #[arg(long, default_value = "livreur.toml")]
+        config: PathBuf,
+        #[arg(long, default_value = ".github/release.md.tera")]
+        output: PathBuf,
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() {
@@ -86,6 +104,14 @@ fn main() {
             workflow,
             no_workflow,
         } => commands::init::init(&config, &workflow, no_workflow),
+        Command::Template {
+            command:
+                TemplateCommand::Release {
+                    config,
+                    output,
+                    force,
+                },
+        } => commands::template::release(&config, &output, force),
     };
     if code != 0 {
         std::process::exit(code);
