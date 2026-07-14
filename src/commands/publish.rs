@@ -219,8 +219,7 @@ fn release_artifacts(
     expected: &[String],
     assets: &[PublishedAsset],
 ) -> Result<(Vec<ReleaseArtifact>, String), DiagnosticReport> {
-    debug_assert_eq!(resolved.targets.len(), expected.len());
-    debug_assert_eq!(expected.len(), assets.len());
+    verify_artifact_counts(resolved.targets.len(), expected.len(), assets.len())?;
     if refreshed.url.is_empty() {
         return Err(DiagnosticReport::one(
             "release",
@@ -258,6 +257,22 @@ fn release_artifacts(
     Ok((artifacts, checksum_asset.url.clone()))
 }
 
+fn verify_artifact_counts(
+    targets: usize,
+    expected: usize,
+    hashed: usize,
+) -> Result<(), DiagnosticReport> {
+    if targets != expected || expected != hashed {
+        return Err(DiagnosticReport::one(
+            "assets",
+            format!(
+                "internal artifact count mismatch: targets={targets}, expected={expected}, hashed={hashed}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 struct ScratchDir(PathBuf);
 
 impl ScratchDir {
@@ -275,5 +290,29 @@ impl ScratchDir {
 impl Drop for ScratchDir {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact_counts_must_match_before_zipping() {
+        assert!(verify_artifact_counts(2, 2, 2).is_ok());
+
+        let missing = verify_artifact_counts(2, 1, 1).expect_err("missing asset must fail");
+        assert!(
+            missing
+                .to_string()
+                .contains("targets=2, expected=1, hashed=1")
+        );
+
+        let extra = verify_artifact_counts(1, 2, 2).expect_err("extra asset must fail");
+        assert!(
+            extra
+                .to_string()
+                .contains("targets=1, expected=2, hashed=2")
+        );
     }
 }

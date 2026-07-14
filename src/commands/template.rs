@@ -1,5 +1,6 @@
 use livreur::DEFAULT_RELEASE_TEMPLATE;
 use std::fs;
+use std::io;
 use std::path::Path;
 use toml_edit::{DocumentMut, Item, Table, value};
 
@@ -75,9 +76,99 @@ fn try_release(config: &Path, output: &Path, force: bool) -> Result<std::path::P
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     }
-    fs::write(&output_path, DEFAULT_RELEASE_TEMPLATE)
-        .map_err(|error| format!("cannot write {}: {error}", output_path.display()))?;
-    fs::write(config, document.to_string())
-        .map_err(|error| format!("cannot update {}: {error}", config.display()))?;
+    let previous_output = if output_path.exists() {
+        Some(fs::read(&output_path).map_err(|error| {
+            format!(
+                "cannot preserve existing {} before replacement: {error}",
+                output_path.display()
+            )
+        })?)
+    } else {
+        None
+    };
+    let config_contents = document.to_string();
+    write_template_and_config(&output_path, previous_output.as_deref(), config, || {
+        fs::write(config, config_contents)
+    })?;
     Ok(output_path)
+}
+
+fn write_template_and_config(
+    output: &Path,
+    previous_output: Option<&[u8]>,
+    config: &Path,
+    write_config: impl FnOnce() -> io::Result<()>,
+) -> Result<(), String> {
+    fs::write(output, DEFAULT_RELEASE_TEMPLATE)
+        .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
+    if let Err(error) = write_config() {
+        let message = format!("cannot update {}: {error}", config.display());
+        return match restore_output(output, previous_output) {
+            Ok(()) => Err(message),
+            Err(rollback_error) => Err(format!(
+                "{message}; additionally could not restore {}: {rollback_error}",
+                output.display()
+            )),
+        };
+    }
+    Ok(())
+}
+
+fn restore_output(output: &Path, previous_output: Option<&[u8]>) -> io::Result<()> {
+    match previous_output {
+        Some(contents) => fs::write(output, contents),
+        None => fs::remove_file(output),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn config_write_failure_removes_a_new_template() {
+        let root = fixture_dir();
+        let output = root.join("release.md.tera");
+        let config = root.join("livreur.toml");
+
+        let error = write_template_and_config(&output, None, &config, injected_failure)
+            .expect_err("config write must fail");
+
+        assert!(error.contains("injected config failure"));
+        assert!(!output.exists());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn config_write_failure_restores_a_replaced_template() {
+        let root = fixture_dir();
+        let output = root.join("release.md.tera");
+        let config = root.join("livreur.toml");
+        fs::write(&output, "custom template").expect("write existing template");
+        let previous = fs::read(&output).expect("read existing template");
+
+        let error = write_template_and_config(&output, Some(&previous), &config, injected_failure)
+            .expect_err("config write must fail");
+
+        assert!(error.contains("injected config failure"));
+        assert_eq!(fs::read_to_string(&output).unwrap(), "custom template");
+        fs::remove_dir_all(root).ok();
+    }
+
+    fn fixture_dir() -> std::path::PathBuf {
+        let nonce = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "livreur-template-rollback-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).expect("create fixture");
+        root
+    }
+
+    fn injected_failure() -> io::Result<()> {
+        Err(io::Error::other("injected config failure"))
+    }
 }
