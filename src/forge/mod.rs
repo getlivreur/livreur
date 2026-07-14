@@ -6,7 +6,14 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseView {
     pub is_draft: bool,
-    pub assets: Vec<String>,
+    pub url: String,
+    pub assets: Vec<ReleaseAsset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseAsset {
+    pub name: String,
+    pub url: String,
 }
 
 pub trait Forge {
@@ -37,6 +44,13 @@ pub trait Forge {
     ///
     /// Returns diagnostics when the forge cannot download the requested assets.
     fn download(&self, tag: &str, patterns: &[&str], dir: &Path) -> Result<(), DiagnosticReport>;
+
+    /// Replaces the release description with the contents of `notes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns diagnostics when the forge cannot update the release notes.
+    fn update_notes(&self, tag: &str, notes: &Path) -> Result<(), DiagnosticReport>;
 
     /// Publishes a draft release.
     ///

@@ -181,7 +181,7 @@ fn builds_archives_and_creates_and_uploads_a_draft() {
     assert!(archive.is_file());
     let log = fs::read_to_string(&fixture.gh_log).unwrap();
     let lines = log.lines().collect::<Vec<_>>();
-    assert_eq!(lines[0], "release view v0.1.0 --json assets,isDraft");
+    assert_eq!(lines[0], "release view v0.1.0 --json assets,isDraft,url");
     assert!(lines[1].starts_with("release create v0.1.0 --draft --verify-tag"));
     assert!(lines[2].contains("release upload v0.1.0 --clobber"));
 }
@@ -195,6 +195,30 @@ fn reuses_an_existing_draft() {
     let log = fs::read_to_string(&fixture.gh_log).unwrap();
     assert!(!log.contains("release create"));
     assert!(log.contains("release upload"));
+}
+
+#[test]
+fn build_does_not_require_the_release_template() {
+    let fixture = Fixture::new();
+    let config_path = fixture.root.join("livreur.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "[build]",
+        "template = \"missing-release-template.tera\"\n[build]",
+    );
+    fs::write(config_path, config).unwrap();
+
+    let output = fixture.run(TARGET, Some("v0.1.0"), &fixture.gh, "missing");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        fs::read_to_string(&fixture.gh_log)
+            .unwrap()
+            .contains("release upload")
+    );
 }
 
 #[test]

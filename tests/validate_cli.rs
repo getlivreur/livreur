@@ -108,3 +108,15 @@ fn invalid_config_has_no_resolved_config() {
     assert!(body["resolved"].is_null());
     assert!(body["release"].is_null());
 }
+
+#[test]
+fn validate_reports_a_missing_release_template() {
+    let fixture = Fixture::new("[release]\ntemplate = \"missing-livreur-release-template.tera\"");
+
+    let output = validate(&fixture.0, None);
+    let body = json(&output);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(body["errors"][0]["path"], "release.template");
+    assert!(body["resolved"].is_object());
+}

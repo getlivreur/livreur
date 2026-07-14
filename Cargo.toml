@@ -19,6 +19,7 @@ flate2 = "1"
 tar = "0.4"
 tera = "=2.0.0"
 toml = "1.1"
+toml_edit = "0.22"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.release]

@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_TARGETS: [&str; 5] = [
     "x86_64-unknown-linux-gnu",
@@ -27,6 +27,8 @@ pub const DEFAULT_CONFIG_TEMPLATE: &str = r#"schema = 1
 
 [release]
 tag = "v{version}"
+# The embedded GitHub release template is used by default. Run
+# `livreur template release` to extract and customize it.
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
@@ -143,12 +145,14 @@ struct RawPackage {
 #[serde(default, deny_unknown_fields)]
 struct RawRelease {
     tag: String,
+    template: Option<PathBuf>,
     targets: Vec<String>,
 }
 impl Default for RawRelease {
     fn default() -> Self {
         Self {
             tag: "v{version}".into(),
+            template: None,
             targets: DEFAULT_TARGETS.iter().map(|s| (*s).into()).collect(),
         }
     }
@@ -323,6 +327,7 @@ pub struct ResolvedConfig {
     pub schema: u32,
     pub package: ResolvedPackage,
     pub tag_template: String,
+    pub release_template: Option<PathBuf>,
     pub targets: Vec<String>,
     pub build: ResolvedBuild,
     pub installers: ResolvedInstallers,
@@ -409,7 +414,11 @@ impl Config {
             .map_err(|e| DiagnosticReport::one("Cargo.toml", e.to_string()))?;
         let package = metadata.root_package().or_else(|| if metadata.workspace_members.len() == 1 { metadata.packages.iter().find(|p| p.id == metadata.workspace_members[0]) } else { None })
             .ok_or_else(|| DiagnosticReport::one("package", "could not select one Cargo package; point --manifest-path at the package manifest"))?;
-        resolve(raw, package)
+        let config_dir = config_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        resolve(raw, package, config_dir)
     }
 }
 
@@ -454,7 +463,11 @@ impl ResolvedConfig {
     }
 }
 
-fn resolve(raw: RawConfig, package: &Package) -> Result<ResolvedConfig, DiagnosticReport> {
+fn resolve(
+    raw: RawConfig,
+    package: &Package,
+    config_dir: &Path,
+) -> Result<ResolvedConfig, DiagnosticReport> {
     let mut errors = DiagnosticReport { errors: vec![] };
     if raw.schema != 1 {
         errors.push(
@@ -491,10 +504,18 @@ fn resolve(raw: RawConfig, package: &Package) -> Result<ResolvedConfig, Diagnost
     let tool = raw.tool.map(|tool| ResolvedTool {
         version: tool.version,
     });
+    let release_template = raw.release.template.map(|path| {
+        if path.is_absolute() {
+            path
+        } else {
+            config_dir.join(path)
+        }
+    });
     let resolved = ResolvedConfig {
         schema: raw.schema,
         package: resolved_package,
         tag_template: raw.release.tag,
+        release_template,
         targets: raw.release.targets,
         build: ResolvedBuild {
             features: raw.build.features,
@@ -722,6 +743,7 @@ authors = ["Example"]
         assert!(raw.package.binary.is_none());
         let release = RawRelease::default();
         assert_eq!(raw.release.tag, release.tag);
+        assert_eq!(raw.release.template, release.template);
         assert_eq!(raw.release.targets, release.targets);
         let build = RawBuild::default();
         assert_eq!(raw.build.features, build.features);
@@ -864,6 +886,47 @@ authors = ["Example"]
         let error = Config::load(&path, manifest).expect_err("unknown key must fail");
 
         assert!(error.to_string().contains("unknown field `typo`"));
+    }
+
+    #[test]
+    fn release_template_is_resolved_relative_to_the_config() {
+        let template_name = format!("livreur-template-{}.tera", std::process::id());
+        let fixture = Fixture::new(&format!("[release]\ntemplate = {template_name:?}"));
+        let template = fixture.0.parent().unwrap().join(&template_name);
+        fs::write(&template, "{{ release.tag }}").expect("write template");
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        let resolved = Config::load(&fixture, manifest).expect("valid custom template");
+
+        assert_eq!(
+            resolved.release_template.as_deref(),
+            Some(template.as_path())
+        );
+        fs::remove_file(template).ok();
+    }
+
+    #[test]
+    fn release_template_must_exist_and_use_known_variables() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let missing =
+            Fixture::new("[release]\ntemplate = \"missing-livreur-release-template.tera\"");
+        let resolved = Config::load(&missing, &manifest).expect("config should still load");
+        let error = crate::release_notes::validate_release_template(&resolved)
+            .expect_err("missing template must fail validation");
+        assert!(error.to_string().contains("release.template: cannot read"));
+
+        let template_name = format!("livreur-invalid-template-{}.tera", std::process::id());
+        let invalid = Fixture::new(&format!("[release]\ntemplate = {template_name:?}"));
+        let template = invalid.0.parent().unwrap().join(&template_name);
+        fs::write(&template, "{{ unknown.value }}").expect("write template");
+
+        let resolved = Config::load(&invalid, manifest).expect("config should still load");
+        let error = crate::release_notes::validate_release_template(&resolved)
+            .expect_err("unknown variable must fail validation");
+
+        assert!(error.to_string().contains("release.template:"));
+        assert!(error.to_string().contains("unknown"));
+        fs::remove_file(template).ok();
     }
 
     #[test]

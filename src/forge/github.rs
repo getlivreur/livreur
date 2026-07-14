@@ -27,17 +27,21 @@ impl Default for GitHub {
 #[serde(rename_all = "camelCase")]
 struct GhRelease {
     is_draft: bool,
+    #[serde(default)]
+    url: String,
     assets: Vec<GhAsset>,
 }
 
 #[derive(Deserialize)]
 struct GhAsset {
     name: String,
+    #[serde(default)]
+    url: String,
 }
 
 impl Forge for GitHub {
     fn view_release(&self, tag: &str) -> Result<Option<ReleaseView>, DiagnosticReport> {
-        let output = self.run(["release", "view", tag, "--json", "assets,isDraft"])?;
+        let output = self.run(["release", "view", tag, "--json", "assets,isDraft,url"])?;
         if !output.status.success() {
             let message = output_message(&output);
             if output.status.code() == Some(1)
@@ -52,7 +56,15 @@ impl Forge for GitHub {
         })?;
         Ok(Some(ReleaseView {
             is_draft: release.is_draft,
-            assets: release.assets.into_iter().map(|asset| asset.name).collect(),
+            url: release.url,
+            assets: release
+                .assets
+                .into_iter()
+                .map(|asset| super::ReleaseAsset {
+                    name: asset.name,
+                    url: asset.url,
+                })
+                .collect(),
         }))
     }
 
@@ -94,6 +106,16 @@ impl Forge for GitHub {
             args.push((*pattern).into());
         }
         self.run_success(args)
+    }
+
+    fn update_notes(&self, tag: &str, notes: &Path) -> Result<(), DiagnosticReport> {
+        self.run_success([
+            OsStr::new("release"),
+            OsStr::new("edit"),
+            OsStr::new(tag),
+            OsStr::new("--notes-file"),
+            notes.as_os_str(),
+        ])
     }
 
     fn undraft(&self, tag: &str) -> Result<(), DiagnosticReport> {
