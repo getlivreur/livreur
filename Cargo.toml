@@ -1,6 +1,6 @@
 [package]
 name = "livreur"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 description = "package and ship your rust binaries to brew,npm and more"
 license = "MIT"
